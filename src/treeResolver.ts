@@ -7,7 +7,7 @@ export function resolveReferences(tree: any): any {
   // We need to keep track of all nodes and their paths for reference resolution
   const nodeIndex: { path: (string | number)[]; node: any }[] = [];
   indexNodes(tree, [], nodeIndex);
-  return resolveNode(tree, [], nodeIndex, []);
+  return resolveNode(tree, [], nodeIndex, [], true, false);
 }
 
 function indexNodes(
@@ -33,17 +33,61 @@ function resolveNode(
   node: any,
   path: (string | number)[],
   index: { path: (string | number)[]; node: any }[],
-  ancestors: (string | number)[][]
+  ancestors: (string | number)[][],
+  isTopLevel: boolean,
+  fromRefOrSeq: boolean
 ): any {
   if (typeof node === "string") return node;
-  if (Array.isArray(node))
-    return node.map((child, idx) =>
-      resolveNode(child, path.concat(idx), index, ancestors)
-    );
+  if (Array.isArray(node)) {
+    const result: any[] = [];
+    const fromSeqOrRef: boolean[] = [];
+    for (let idx = 0; idx < node.length; idx++) {
+      let childFromSeqOrRef = false;
+      if (isTopLevel && typeof node[idx] === "object" && node[idx] !== null) {
+        if ("seq" in node[idx] || "ref" in node[idx]) {
+          childFromSeqOrRef = true;
+        }
+      }
+      const child = resolveNode(
+        node[idx],
+        path.concat(idx),
+        index,
+        ancestors,
+        false,
+        childFromSeqOrRef
+      );
+      result.push(child);
+      fromSeqOrRef.push(childFromSeqOrRef);
+    }
+    if (isTopLevel) {
+      const flattened: any[] = [];
+      for (let i = 0; i < result.length; i++) {
+        const el = result[i];
+        if (
+          fromSeqOrRef[i] &&
+          Array.isArray(el) &&
+          el.every((e) => typeof e === "string")
+        ) {
+          flattened.push(...el);
+        } else {
+          flattened.push(el);
+        }
+      }
+      return flattened;
+    }
+    return result;
+  }
   if (typeof node === "object" && node !== null) {
     if ("ref" in node) {
       const refPath = node.ref;
-      return resolveRefPath(refPath, path, index, ancestors);
+      const resolved = resolveRefPath(refPath, path, index, ancestors);
+      if (
+        Array.isArray(resolved) &&
+        resolved.every((e) => typeof e === "string")
+      ) {
+        return resolveNode(resolved, path, index, ancestors, isTopLevel, true);
+      }
+      return resolved;
     }
     const keys = Object.keys(node);
     if (keys.length === 1) {
@@ -53,11 +97,12 @@ function resolveNode(
           node[key],
           path.concat(key),
           index,
-          ancestors.concat([path])
+          ancestors.concat([path]),
+          false,
+          false
         ),
       };
     }
-    // Other objects (should not occur)
     return { ...node };
   }
   return node;
