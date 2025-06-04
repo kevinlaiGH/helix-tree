@@ -1,5 +1,6 @@
 import { describe, it, expect } from "@jest/globals";
 import { validateTree } from "../../src/treeParser";
+import type { TreeNode } from "../../src/treeTypes";
 
 describe("validateTree", () => {
   it("accepts a valid tree with atoms", () => {
@@ -19,7 +20,7 @@ describe("validateTree", () => {
   });
 
   it("rejects non-array root", () => {
-    expect(() => validateTree({})).toThrow(
+    expect(() => validateTree({} as unknown as TreeNode[])).toThrow(
       "Root of the tree must be an array."
     );
   });
@@ -29,15 +30,15 @@ describe("validateTree", () => {
   });
 
   it("rejects reference with non-string path", () => {
-    expect(() => validateTree([{ ref: 123 }])).toThrow(
+    expect(() => validateTree([{ ref: 123 } as unknown as TreeNode])).toThrow(
       "Reference path must be a string"
     );
   });
 
   it("rejects invalid sequence", () => {
-    expect(() => validateTree([{ seq: { start: "a", end: 3 } }])).toThrow(
-      "Invalid sequence"
-    );
+    expect(() =>
+      validateTree([{ seq: { start: "a", end: 3 } } as unknown as TreeNode])
+    ).toThrow("Invalid sequence");
   });
 
   it("rejects hierarchical object with multiple keys", () => {
@@ -53,6 +54,8 @@ describe("validateTree", () => {
   });
 
   it("rejects completely invalid node", () => {
-    expect(() => validateTree([null])).toThrow("Invalid node");
+    expect(() => validateTree([null as unknown as TreeNode])).toThrow(
+      "Invalid node"
+    );
   });
 });

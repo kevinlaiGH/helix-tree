@@ -1,73 +1,78 @@
+import type { TreeNode } from "./treeTypes";
+
+function isAtom(node: TreeNode): node is string {
+  return typeof node === "string";
+}
+
+// Helper marker for flattening
+const FLATTEN = Symbol("flatten");
+
+type FlattenedArray = string[] & { [FLATTEN]?: true };
+
 /**
  * Resolves all references in the tree, replacing each { ref: <path> } node with the referenced node.
  * Throws errors for invalid, ambiguous, forward, or ancestor references.
  * Assumes the tree has already had sequences expanded.
  */
-export function resolveReferences(tree: any): any {
-  // We need to keep track of all nodes and their paths for reference resolution
-  const nodeIndex: { path: (string | number)[]; node: any }[] = [];
+export function resolveReferences(tree: TreeNode): TreeNode {
+  const nodeIndex: { path: (string | number)[]; node: TreeNode }[] = [];
   indexNodes(tree, [], nodeIndex);
-  return resolveNode(tree, [], nodeIndex, [], true, false);
+  return resolveNode(tree, [], nodeIndex, [], true);
 }
 
 function indexNodes(
-  node: any,
+  node: TreeNode,
   path: (string | number)[],
-  index: { path: (string | number)[]; node: any }[]
-) {
+  index: { path: (string | number)[]; node: TreeNode }[]
+): void {
+  if (!path.every((v) => typeof v === "string" || typeof v === "number")) {
+    throw new Error(
+      "Path contains non-string/number value: " + JSON.stringify(path)
+    );
+  }
   index.push({ path, node });
   if (Array.isArray(node)) {
-    node.forEach((child, idx) => indexNodes(child, path.concat(idx), index));
-  } else if (typeof node === "object" && node !== null) {
+    node.forEach((child, idx) => indexNodes(child, [...path, idx], index));
+  } else if (typeof node === "object" && node !== null && !isAtom(node)) {
     if ("ref" in node) return; // Don't index inside references
     if ("seq" in node) return; // Sequences should already be expanded
     const keys = Object.keys(node);
     if (keys.length === 1) {
       const key = keys[0];
-      indexNodes(node[key], path.concat(key), index);
+      if (typeof key !== "string") {
+        throw new Error("Key is not a string: " + JSON.stringify(key));
+      }
+      indexNodes(
+        (node as Record<string, TreeNode>)[key],
+        [...path, key],
+        index
+      );
     }
   }
 }
 
 function resolveNode(
-  node: any,
+  node: TreeNode,
   path: (string | number)[],
-  index: { path: (string | number)[]; node: any }[],
+  index: { path: (string | number)[]; node: TreeNode }[],
   ancestors: (string | number)[][],
-  isTopLevel: boolean,
-  fromRefOrSeq: boolean
-): any {
-  if (typeof node === "string") return node;
+  isTopLevel = false
+): TreeNode {
+  if (!path.every((v) => typeof v === "string" || typeof v === "number")) {
+    throw new Error(
+      "Path contains non-string/number value: " + JSON.stringify(path)
+    );
+  }
+  if (isAtom(node)) return node;
   if (Array.isArray(node)) {
-    const result: any[] = [];
-    const fromSeqOrRef: boolean[] = [];
-    for (let idx = 0; idx < node.length; idx++) {
-      let childFromSeqOrRef = false;
-      if (isTopLevel && typeof node[idx] === "object" && node[idx] !== null) {
-        if ("seq" in node[idx] || "ref" in node[idx]) {
-          childFromSeqOrRef = true;
-        }
-      }
-      const child = resolveNode(
-        node[idx],
-        path.concat(idx),
-        index,
-        ancestors,
-        false,
-        childFromSeqOrRef
-      );
-      result.push(child);
-      fromSeqOrRef.push(childFromSeqOrRef);
-    }
+    const result = node.map((child, idx) =>
+      resolveNode(child, [...path, idx], index, ancestors, isTopLevel)
+    );
     if (isTopLevel) {
-      const flattened: any[] = [];
-      for (let i = 0; i < result.length; i++) {
-        const el = result[i];
-        if (
-          fromSeqOrRef[i] &&
-          Array.isArray(el) &&
-          el.every((e) => typeof e === "string")
-        ) {
+      // Only flatten children that are tagged as FLATTEN
+      const flattened: TreeNode[] = [];
+      for (const el of result) {
+        if (Array.isArray(el) && (el as FlattenedArray)[FLATTEN]) {
           flattened.push(...el);
         } else {
           flattened.push(el);
@@ -77,28 +82,29 @@ function resolveNode(
     }
     return result;
   }
-  if (typeof node === "object" && node !== null) {
-    if ("ref" in node) {
-      const refPath = node.ref;
+  if (typeof node === "object" && node !== null && !isAtom(node)) {
+    if ("ref" in node && typeof (node as any).ref === "string") {
+      const refPath = (node as { ref: string }).ref;
       const resolved = resolveRefPath(refPath, path, index, ancestors);
-      if (
-        Array.isArray(resolved) &&
-        resolved.every((e) => typeof e === "string")
-      ) {
-        return resolveNode(resolved, path, index, ancestors, isTopLevel, true);
+      // If this is a top-level reference and resolves to an array of atoms, tag it for flattening
+      if (isTopLevel && Array.isArray(resolved) && resolved.every(isAtom)) {
+        (resolved as FlattenedArray)[FLATTEN] = true;
+        return resolved;
       }
       return resolved;
     }
     const keys = Object.keys(node);
     if (keys.length === 1) {
       const key = keys[0];
+      if (typeof key !== "string") {
+        throw new Error("Key is not a string: " + JSON.stringify(key));
+      }
       return {
         [key]: resolveNode(
-          node[key],
-          path.concat(key),
+          (node as Record<string, TreeNode>)[key],
+          [...path, key],
           index,
-          ancestors.concat([path]),
-          false,
+          [...ancestors, path],
           false
         ),
       };
@@ -111,12 +117,12 @@ function resolveNode(
 function resolveRefPath(
   refPath: string,
   currentPath: (string | number)[],
-  index: { path: (string | number)[]; node: any }[],
+  index: { path: (string | number)[]; node: TreeNode }[],
   ancestors: (string | number)[][]
-): any {
+): TreeNode {
   // Canonical path: starts with '/'
   if (refPath.startsWith("/")) {
-    const parts = refPath
+    const parts: (string | number)[] = refPath
       .slice(1)
       .split("/")
       .map((p) => (isNaN(Number(p)) ? p : Number(p)));
@@ -128,30 +134,33 @@ function resolveRefPath(
       (match.path.length < currentPath.length &&
         match.path.every((v, i) => v === currentPath[i]))
     ) {
+      let pathStr = JSON.stringify(currentPath);
       throw new Error(
-        `Invalid or ambiguous reference at ${formatPath(
-          currentPath
-        )}: ${refPath}`
+        `Invalid or ambiguous reference at ${pathStr}: ${refPath}`
       );
     }
     return match.node;
   } else {
     // Short path: must resolve uniquely
-    const parts = refPath
+    const parts: (string | number)[] = refPath
       .split("/")
       .map((p) => (isNaN(Number(p)) ? p : Number(p)));
     // Find all candidates for the first part that are before the current node in traversal order
     let candidates = index.filter((entry) => {
       // Atom node
       if (
-        typeof entry.node === "string" &&
+        isAtom(entry.node) &&
         entry.node === parts[0] &&
         isBeforeInTraversal(entry.path, currentPath)
       ) {
         return true;
       }
       // Hierarchical object: key is atom
-      if (typeof entry.node === "object" && entry.node !== null) {
+      if (
+        typeof entry.node === "object" &&
+        entry.node !== null &&
+        !isAtom(entry.node)
+      ) {
         const keys = Object.keys(entry.node);
         if (
           keys.length === 1 &&
@@ -164,12 +173,16 @@ function resolveRefPath(
       return false;
     });
     // Walk down the path for each candidate
-    let matches: { path: (string | number)[]; node: any }[] = [];
+    let matches: { path: (string | number)[]; node: TreeNode }[] = [];
     for (const candidate of candidates) {
       let match = candidate;
       let valid = true;
       for (let i = 1; i < parts.length; i++) {
-        if (typeof match.node !== "object" || match.node === null) {
+        if (
+          typeof match.node !== "object" ||
+          match.node === null ||
+          isAtom(match.node)
+        ) {
           valid = false;
           break;
         }
@@ -189,7 +202,7 @@ function resolveRefPath(
         } else if (typeof parts[i] === "string" && parts[i] in match.node) {
           match = {
             path: match.path.concat(parts[i]),
-            node: match.node[parts[i]],
+            node: (match.node as Record<string, TreeNode>)[parts[i]],
           };
         } else {
           valid = false;
@@ -212,10 +225,9 @@ function resolveRefPath(
     if (matches.length === 1) {
       return matches[0].node;
     } else {
+      let pathStr = JSON.stringify(currentPath);
       throw new Error(
-        `Invalid or ambiguous reference at ${formatPath(
-          currentPath
-        )}: ${refPath}`
+        `Invalid or ambiguous reference at ${pathStr}: ${refPath}`
       );
     }
   }
@@ -226,17 +238,14 @@ function isValidReference(
   currentPath: (string | number)[],
   ancestors: (string | number)[][]
 ): boolean {
-  // No forward references (target must be before current in traversal order)
   for (let i = 0; i < Math.min(targetPath.length, currentPath.length); i++) {
     if (targetPath[i] < currentPath[i]) return true;
     if (targetPath[i] > currentPath[i]) return false;
   }
   if (targetPath.length < currentPath.length) return true;
-  // No ancestor references
   for (const ancestor of ancestors) {
     if (pathsEqual(targetPath, ancestor)) return false;
   }
-  // No self-reference
   if (pathsEqual(targetPath, currentPath)) return false;
   return true;
 }
