@@ -66,6 +66,15 @@ function expandNode(node: TreeNode): TreeNode {
     }
     return result;
   }
+  // If node is an object with a 'seq' key but not a valid sequence, throw
+  if (
+    typeof node === "object" &&
+    node !== null &&
+    !Array.isArray(node) &&
+    "seq" in node
+  ) {
+    throw new Error("Invalid sequence node: " + JSON.stringify(node));
+  }
   if (isHierarchical(node)) {
     const keys = Object.keys(node);
     if (keys.length === 1) {

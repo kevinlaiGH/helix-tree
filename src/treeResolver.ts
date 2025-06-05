@@ -1,4 +1,5 @@
 import type { TreeNode } from "./treeTypes";
+import { ERR_INVALID_REF } from "./treeErrors";
 
 function isAtom(node: TreeNode): node is string {
   return typeof node === "string";
@@ -66,13 +67,23 @@ function resolveNode(
   if (isAtom(node)) return node;
   if (Array.isArray(node)) {
     const result = node.map((child, idx) =>
-      resolveNode(child, [...path, idx], index, ancestors, isTopLevel)
+      resolveNode(
+        child,
+        [...path, idx],
+        index,
+        ancestors,
+        isTopLevel ? true : false
+      )
     );
     if (isTopLevel) {
-      // Only flatten children that are tagged as FLATTEN
+      // Only flatten children that are tagged as FLATTEN (arrays of atoms from top-level references)
       const flattened: TreeNode[] = [];
       for (const el of result) {
-        if (Array.isArray(el) && (el as FlattenedArray)[FLATTEN]) {
+        if (
+          Array.isArray(el) &&
+          (el as FlattenedArray)[FLATTEN] &&
+          el.every(isAtom)
+        ) {
           flattened.push(...el);
         } else {
           flattened.push(el);
@@ -84,8 +95,26 @@ function resolveNode(
   }
   if (typeof node === "object" && node !== null && !isAtom(node)) {
     if ("ref" in node && typeof (node as any).ref === "string") {
-      const refPath = (node as { ref: string }).ref;
-      const resolved = resolveRefPath(refPath, path, index, ancestors);
+      let resolved = resolveRefPath(
+        (node as { ref: string }).ref,
+        path,
+        index,
+        ancestors
+      );
+      // Recursively resolve references until a non-reference value is reached
+      while (
+        typeof resolved === "object" &&
+        resolved !== null &&
+        "ref" in resolved &&
+        typeof (resolved as any).ref === "string"
+      ) {
+        resolved = resolveRefPath(
+          (resolved as { ref: string }).ref,
+          path,
+          index,
+          ancestors
+        );
+      }
       // If this is a top-level reference and resolves to an array of atoms, tag it for flattening
       if (isTopLevel && Array.isArray(resolved) && resolved.every(isAtom)) {
         (resolved as FlattenedArray)[FLATTEN] = true;
@@ -135,11 +164,9 @@ function resolveRefPath(
         match.path.every((v, i) => v === currentPath[i]))
     ) {
       let pathStr = JSON.stringify(currentPath);
-      throw new Error(
-        `Invalid or ambiguous reference at ${pathStr}: ${refPath}`
-      );
+      throw new Error(`${ERR_INVALID_REF} at ${pathStr}: ${refPath}`);
     }
-    return match.node;
+    return deepCopy(match.node);
   } else {
     // Short path: must resolve uniquely
     const parts: (string | number)[] = refPath
@@ -223,7 +250,7 @@ function resolveRefPath(
     }
     // If exactly one match, use it; otherwise ambiguous or invalid
     if (matches.length === 1) {
-      return matches[0].node;
+      return deepCopy(matches[0].node);
     } else {
       let pathStr = JSON.stringify(currentPath);
       throw new Error(
@@ -258,10 +285,6 @@ function pathsEqual(a: (string | number)[], b: (string | number)[]): boolean {
   return true;
 }
 
-function formatPath(path: (string | number)[]): string {
-  return path.map(String).join("/");
-}
-
 function isBeforeInTraversal(
   a: (string | number)[],
   b: (string | number)[]
@@ -275,4 +298,19 @@ function isBeforeInTraversal(
     }
   }
   return a.length < b.length;
+}
+
+function deepCopy<T>(obj: T): T {
+  if (Array.isArray(obj)) {
+    return obj.map(deepCopy) as unknown as T;
+  } else if (obj && typeof obj === "object") {
+    const result: any = {};
+    for (const key in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        result[key] = deepCopy((obj as any)[key]);
+      }
+    }
+    return result;
+  }
+  return obj;
 }

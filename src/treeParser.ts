@@ -1,13 +1,13 @@
-// This file is intended for Node.js runtime.
-// If using TypeScript, ensure @types/node is installed for type definitions.
-
-import type {
-  Atom,
-  Reference,
-  Sequence,
-  Hierarchical,
-  TreeNode,
-} from "./treeTypes";
+import type { TreeNode } from "./treeTypes";
+import {
+  ERR_ROOT_ARRAY,
+  ERR_INVALID_ATOM,
+  ERR_REF_PATH,
+  ERR_INVALID_SEQ,
+  ERR_HIERARCHY_KEYS,
+  ERR_INVALID_ATOM_KEY,
+  ERR_INVALID_NODE,
+} from "./treeErrors";
 
 // --- Constants ---
 const ATOM_REGEX = /^([a-zA-Z][a-zA-Z0-9]*|'\d+')$/;
@@ -19,7 +19,7 @@ const ATOM_REGEX = /^([a-zA-Z][a-zA-Z0-9]*|'\d+')$/;
  */
 export function validateTree(tree: TreeNode[]): void {
   if (!Array.isArray(tree)) {
-    throw new Error("Root of the tree must be an array.");
+    throw new Error(ERR_ROOT_ARRAY);
   }
   tree.forEach((node, idx) => validateNode(node, [idx]));
 }
@@ -27,7 +27,7 @@ export function validateTree(tree: TreeNode[]): void {
 function validateNode(node: TreeNode, path: (string | number)[]): void {
   if (typeof node === "string") {
     if (!isValidAtom(node)) {
-      throw new Error(`Invalid atom at ${formatPath(path)}: ${node}`);
+      throw new Error(`${ERR_INVALID_ATOM} at ${formatPath(path)}: ${node}`);
     }
     return;
   }
@@ -37,10 +37,11 @@ function validateNode(node: TreeNode, path: (string | number)[]): void {
   }
   if (typeof node === "object" && node !== null) {
     if ("ref" in node) {
-      if (typeof (node as any).ref !== "string") {
-        throw new Error(
-          `Reference path must be a string at ${formatPath(path)}`
-        );
+      if (
+        typeof (node as any).ref !== "string" ||
+        (node as any).ref.length === 0
+      ) {
+        throw new Error(`${ERR_REF_PATH} at ${formatPath(path)}`);
       }
       return;
     }
@@ -49,27 +50,28 @@ function validateNode(node: TreeNode, path: (string | number)[]): void {
       if (
         typeof seq !== "object" ||
         typeof seq.start !== "number" ||
-        typeof seq.end !== "number"
+        typeof seq.end !== "number" ||
+        !Number.isInteger(seq.start) ||
+        !Number.isInteger(seq.end) ||
+        seq.start > seq.end
       ) {
-        throw new Error(`Invalid sequence at ${formatPath(path)}`);
+        throw new Error(`${ERR_INVALID_SEQ} at ${formatPath(path)}`);
       }
       return;
     }
     const keys = Object.keys(node);
     if (keys.length !== 1) {
-      throw new Error(
-        `Hierarchical object must have exactly one key at ${formatPath(path)}`
-      );
+      throw new Error(`${ERR_HIERARCHY_KEYS} at ${formatPath(path)}`);
     }
     const key = keys[0];
     if (!isValidAtom(key)) {
-      throw new Error(`Invalid atom key at ${formatPath(path)}: ${key}`);
+      throw new Error(`${ERR_INVALID_ATOM_KEY} at ${formatPath(path)}: ${key}`);
     }
     validateNode((node as any)[key], path.concat(key));
     return;
   }
   throw new Error(
-    `Invalid node at ${formatPath(path)}: ${JSON.stringify(node)}`
+    `${ERR_INVALID_NODE} at ${formatPath(path)}: ${JSON.stringify(node)}`
   );
 }
 
@@ -79,38 +81,4 @@ function isValidAtom(atom: string): boolean {
 
 function formatPath(path: (string | number)[]): string {
   return path.map(String).join("/");
-}
-
-// --- CLI/IO Logic ---
-/**
- * Reads all input from stdin and returns it as a string.
- */
-function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk: string) => (data += chunk));
-    process.stdin.on("end", () => resolve(data));
-    process.stdin.on("error", reject);
-  });
-}
-
-/**
- * Main entry point: reads JSON from stdin, validates, and prints result or error.
- */
-export async function main() {
-  try {
-    const input = await readStdin();
-    const tree = JSON.parse(input);
-    validateTree(tree);
-    console.log("Tree is valid.");
-  } catch (err: any) {
-    console.error("Validation error:", err.message);
-    process.exit(1);
-  }
-}
-
-// If run directly, execute main
-if (require.main === module) {
-  main();
 }
